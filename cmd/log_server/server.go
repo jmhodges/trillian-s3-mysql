@@ -24,6 +24,9 @@ var (
 	optsLogRead = trees.NewGetOpts(trees.Query, trillian.TreeType_LOG, trillian.TreeType_PREORDERED_LOG)
 )
 
+// FIXME better docs. See GetLeavesByRange for what's different about this server
+// type. The rest of the methods just proxy back to the original Trillian GRPC
+// server type.
 type cachedLeavesByRangeServer struct {
 	registry  extension.Registry
 	logServer trillian.TrillianLogServer
