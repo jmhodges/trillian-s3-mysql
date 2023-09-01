@@ -301,9 +301,6 @@ func (s *tiledLeavesByRangeServer) GetLeavesByRange(ctx context.Context, req *tr
 	// Truncate to match the request
 	prefixToRemove := req.StartIndex - tile.req.StartIndex
 	if prefixToRemove >= int64(len(resp.Leaves)) {
-		// FIXME I believe this would already happen when the original
-		// GetLeavesByRange is called?
-
 		// In this case, the requested range is entirely outside the current log,
 		// but the _tile_'s beginning was inside the log. For instance, a log with
 		// size 1000 and max_getentries of 256, where ctile is handling a request
