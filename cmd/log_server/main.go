@@ -17,7 +17,10 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	_ "net/http/pprof" // Register pprof HTTP handlers.
@@ -26,6 +29,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/fxamacker/cbor/v2"
 	"github.com/google/trillian"
 	"github.com/google/trillian/cmd"
 	"github.com/google/trillian/extension"
@@ -38,11 +45,13 @@ import (
 	"github.com/google/trillian/quota/etcd/quotapb"
 	"github.com/google/trillian/server"
 	"github.com/google/trillian/storage"
+	"github.com/google/trillian/trees"
 	"github.com/google/trillian/util"
 	"github.com/google/trillian/util/clock"
 	"github.com/jmhodges/trillian-s3-mysql/cmd/internal/serverutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/klog/v2"
 
 	// Register supported storage providers.
@@ -181,7 +190,9 @@ func main() {
 			if err := logServer.IsHealthy(); err != nil {
 				return err
 			}
-			trillian.RegisterTrillianLogServer(s, logServer)
+			tiledLeavesByRangeServer := &tiledLeavesByRangeServer{
+				registry: registry, logServer: logServer, tileSize: 1000, s3Prefix: "FIXME", s3Bucket: "FIXME", s3Service: nil} // FIXME s3 set up
+			trillian.RegisterTrillianLogServer(s, tiledLeavesByRangeServer)
 			if *quotaSystem == etcd.QuotaManagerName {
 				quotapb.RegisterQuotaServer(s, quotaapi.NewServer(client))
 			}
@@ -216,4 +227,227 @@ func mustCreate(fileName string) *os.File {
 		klog.Fatal(err)
 	}
 	return f
+}
+
+var (
+	optsLogRead = trees.NewGetOpts(trees.Query, trillian.TreeType_LOG, trillian.TreeType_PREORDERED_LOG)
+)
+
+type tiledLeavesByRangeServer struct {
+	registry  extension.Registry
+	logServer trillian.TrillianLogServer
+	tileSize  int64
+
+	s3Prefix  string
+	s3Bucket  string
+	s3Service *s3.Client
+}
+
+// AddSequencedLeaves implements trillian.TrillianLogServer.
+func (s *tiledLeavesByRangeServer) AddSequencedLeaves(ctx context.Context, req *trillian.AddSequencedLeavesRequest) (*trillian.AddSequencedLeavesResponse, error) {
+	return s.logServer.AddSequencedLeaves(ctx, req)
+}
+
+// GetConsistencyProof implements trillian.TrillianLogServer.
+func (s *tiledLeavesByRangeServer) GetConsistencyProof(ctx context.Context, req *trillian.GetConsistencyProofRequest) (*trillian.GetConsistencyProofResponse, error) {
+	return s.logServer.GetConsistencyProof(ctx, req)
+}
+
+// GetEntryAndProof implements trillian.TrillianLogServer.
+func (s *tiledLeavesByRangeServer) GetEntryAndProof(ctx context.Context, req *trillian.GetEntryAndProofRequest) (*trillian.GetEntryAndProofResponse, error) {
+	return s.logServer.GetEntryAndProof(ctx, req)
+}
+
+// GetInclusionProof implements trillian.TrillianLogServer.
+func (s *tiledLeavesByRangeServer) GetInclusionProof(ctx context.Context, req *trillian.GetInclusionProofRequest) (*trillian.GetInclusionProofResponse, error) {
+	return s.logServer.GetInclusionProof(ctx, req)
+}
+
+// GetInclusionProofByHash implements trillian.TrillianLogServer.
+func (s *tiledLeavesByRangeServer) GetInclusionProofByHash(ctx context.Context, req *trillian.GetInclusionProofByHashRequest) (*trillian.GetInclusionProofByHashResponse, error) {
+	return s.logServer.GetInclusionProofByHash(ctx, req)
+}
+
+// GetLatestSignedLogRoot implements trillian.TrillianLogServer.
+func (s *tiledLeavesByRangeServer) GetLatestSignedLogRoot(ctx context.Context, req *trillian.GetLatestSignedLogRootRequest) (*trillian.GetLatestSignedLogRootResponse, error) {
+	return s.logServer.GetLatestSignedLogRoot(ctx, req)
+}
+
+// GetLeavesByRange implements trillian.TrillianLogServer and does real things. FIXME
+func (s *tiledLeavesByRangeServer) GetLeavesByRange(ctx context.Context, req *trillian.GetLeavesByRangeRequest) (*trillian.GetLeavesByRangeResponse, error) {
+	// FIXME
+	// err := validateGetLeavesByRangeRequest(req)
+	// if err != nil {
+	// 	return err
+	// }
+
+	tree, ctx, err := s.getTreeAndContext(ctx, req.LogId, optsLogRead)
+	if err != nil {
+		return nil, err
+	}
+
+	tile := s.makeTiledRequest(tree, req)
+
+	// FIXME metadata.SendHeaders probably isn't what we want since it can be
+	// only called one. Are we sure we need what the source was? Shouldn't we be
+	// testing that another way?
+	contents, _, err := s.getAndCacheTile(ctx, tile)
+	if err != nil {
+		return nil, err // FIXME status codes or some such?
+	}
+	return contents, err
+}
+
+// InitLog implements trillian.TrillianLogServer.
+func (s *tiledLeavesByRangeServer) InitLog(ctx context.Context, req *trillian.InitLogRequest) (*trillian.InitLogResponse, error) {
+	return s.logServer.InitLog(ctx, req)
+}
+
+// QueueLeaf implements trillian.TrillianLogServer.
+func (s *tiledLeavesByRangeServer) QueueLeaf(ctx context.Context, req *trillian.QueueLeafRequest) (*trillian.QueueLeafResponse, error) {
+	return s.logServer.QueueLeaf(ctx, req)
+}
+
+func (s *tiledLeavesByRangeServer) getTreeAndContext(ctx context.Context, treeID int64, opts trees.GetOpts) (*trillian.Tree, context.Context, error) {
+	tree, err := trees.GetTree(ctx, s.registry.AdminStorage, treeID, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	return tree, trees.NewContext(ctx, tree), nil
+}
+
+type tileRequest struct {
+	req    *trillian.GetLeavesByRangeRequest
+	treeID int64
+}
+
+// key returns the S3 key for the tile.
+func (t tileRequest) key() string {
+	return fmt.Sprintf("tree_id=%d/tile_size=%d/%d.cbor.gz", t.treeID, t.req.Count, t.req.StartIndex)
+}
+
+func (s *tiledLeavesByRangeServer) makeTiledRequest(tree *trillian.Tree, req *trillian.GetLeavesByRangeRequest) tileRequest {
+	tileOffset := req.StartIndex % s.tileSize // FIXME tileSize? Doc the difference between tileSize and maxLeavesByRange or that it's used for two meanings?
+	tileStart := req.StartIndex - tileOffset
+
+	tiledReq := proto.Clone(req).(*trillian.GetLeavesByRangeRequest)
+	tiledReq.StartIndex = tileStart
+	tiledReq.Count = s.tileSize
+
+	return tileRequest{
+		req:    tiledReq,
+		treeID: tree.TreeId,
+	}
+}
+
+// tileSource is a helper enum to indicate to the user whether the tile returned
+// to them was found in S3 or in the CT log.
+type tileSource string
+
+const (
+	sourceCTLog tileSource = "CT log"
+	sourceS3    tileSource = "S3"
+)
+
+func (s *tiledLeavesByRangeServer) getAndCacheTile(ctx context.Context, tile tileRequest) (*trillian.GetLeavesByRangeResponse, tileSource, error) {
+	contents, err := s.getFromS3(ctx, tile)
+	if err == nil {
+		return contents, sourceS3, nil
+	}
+
+	if !errors.Is(err, noSuchKey{}) {
+		return nil, sourceS3, fmt.Errorf("error reading tile from s3: %w", err)
+	}
+
+	contents, err = s.logServer.GetLeavesByRange(ctx, tile.req)
+	if err != nil {
+		return nil, sourceCTLog, fmt.Errorf("error reading tile from backend: %w", err)
+	}
+
+	// If we got a partial tile, assume we are at the end of the log and the last
+	// tile isn't filled up yet. In that case, don't write to S3, but still return
+	// results to the user.
+	// FIXME can we tell we're at the end of the log with the AdminStorage or LogStorage interfaces?
+	if s.isPartialTile(contents) {
+		return contents, sourceCTLog, nil
+	}
+
+	err = s.writeToS3(ctx, tile, contents)
+	if err != nil {
+		return nil, sourceCTLog, fmt.Errorf("error writing tile to S3: %w", err)
+	}
+	return contents, sourceCTLog, nil
+}
+
+// isPartialTile returns true if there are fewer items in the tile than were
+// requested by the tileCachingHandler.
+func (s *tiledLeavesByRangeServer) isPartialTile(resp *trillian.GetLeavesByRangeResponse) bool {
+	return int64(len(resp.Leaves)) < s.tileSize
+}
+
+func (s *tiledLeavesByRangeServer) getFromS3(ctx context.Context, t tileRequest) (*trillian.GetLeavesByRangeResponse, error) {
+	key := s.s3Prefix + t.key()
+	resp, err := s.s3Service.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.s3Bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		var nsk *types.NoSuchKey
+		if errors.As(err, &nsk) {
+			return nil, noSuchKey{}
+		}
+		return nil, fmt.Errorf("getting from bucket %q with key %q: %w", s.s3Bucket, key, err)
+	}
+
+	var entries trillian.GetLeavesByRangeResponse // FIXME rename to "resp"
+	gzipReader, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("making gzipReader: %w", err)
+	}
+	err = cbor.NewDecoder(gzipReader).Decode(&entries)
+	if err != nil {
+		return nil, fmt.Errorf("reading body from bucket %q with key %q: %w", s.s3Bucket, key, err)
+	}
+
+	if len(entries.Leaves) != int(t.req.Count) { // FIXME removed the t.end check here
+		return nil, fmt.Errorf("internal inconsistency: len(entries) == %d; tileRequest = %v", len(entries.Leaves), t)
+	}
+
+	return &entries, nil
+}
+
+func (s *tiledLeavesByRangeServer) writeToS3(ctx context.Context, t tileRequest, e *trillian.GetLeavesByRangeResponse) error {
+	if len(e.Leaves) != int(t.req.Count) { // FIXME removed the t.end check here too
+		return fmt.Errorf("internal inconsistency: len(entries) == %d; tileRequest = %v", len(e.Leaves), t)
+	}
+
+	var body bytes.Buffer
+	w := gzip.NewWriter(&body)
+	err := cbor.NewEncoder(w).Encode(e)
+	if err != nil {
+		return nil
+	}
+
+	err = w.Close()
+	if err != nil {
+		return fmt.Errorf("closing gzip writer: %w", err)
+	}
+
+	key := s.s3Prefix + t.key()
+	_, err = s.s3Service.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(s.s3Bucket),
+		Key:    aws.String(key),
+		Body:   bytes.NewReader(body.Bytes()),
+	})
+	if err != nil {
+		return fmt.Errorf("putting in bucket %q with key %q: %s", s.s3Bucket, key, err)
+	}
+	return nil
+}
+
+// noSuchKey indicates the requested key does not exist.
+type noSuchKey struct{}
+
+func (noSuchKey) Error() string {
+	return "no such key"
 }
