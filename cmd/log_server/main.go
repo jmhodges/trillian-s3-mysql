@@ -186,7 +186,7 @@ func main() {
 			var actualServer trillian.TrillianLogServer = logServer
 			if *enableCachedGetLeavesByRange {
 				// FIXME s3 set up
-				actualServer = &tiledLeavesByRangeServer{
+				actualServer = &cachedLeavesByRangeServer{
 					registry: registry, logServer: logServer, tileSize: 1000, s3Prefix: "FIXME", s3Bucket: "FIXME", s3Service: nil,
 				}
 			}

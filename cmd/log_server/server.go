@@ -24,7 +24,7 @@ var (
 	optsLogRead = trees.NewGetOpts(trees.Query, trillian.TreeType_LOG, trillian.TreeType_PREORDERED_LOG)
 )
 
-type tiledLeavesByRangeServer struct {
+type cachedLeavesByRangeServer struct {
 	registry  extension.Registry
 	logServer trillian.TrillianLogServer
 	tileSize  int64
@@ -35,37 +35,37 @@ type tiledLeavesByRangeServer struct {
 }
 
 // AddSequencedLeaves implements trillian.TrillianLogServer.
-func (s *tiledLeavesByRangeServer) AddSequencedLeaves(ctx context.Context, req *trillian.AddSequencedLeavesRequest) (*trillian.AddSequencedLeavesResponse, error) {
+func (s *cachedLeavesByRangeServer) AddSequencedLeaves(ctx context.Context, req *trillian.AddSequencedLeavesRequest) (*trillian.AddSequencedLeavesResponse, error) {
 	return s.logServer.AddSequencedLeaves(ctx, req)
 }
 
 // GetConsistencyProof implements trillian.TrillianLogServer.
-func (s *tiledLeavesByRangeServer) GetConsistencyProof(ctx context.Context, req *trillian.GetConsistencyProofRequest) (*trillian.GetConsistencyProofResponse, error) {
+func (s *cachedLeavesByRangeServer) GetConsistencyProof(ctx context.Context, req *trillian.GetConsistencyProofRequest) (*trillian.GetConsistencyProofResponse, error) {
 	return s.logServer.GetConsistencyProof(ctx, req)
 }
 
 // GetEntryAndProof implements trillian.TrillianLogServer.
-func (s *tiledLeavesByRangeServer) GetEntryAndProof(ctx context.Context, req *trillian.GetEntryAndProofRequest) (*trillian.GetEntryAndProofResponse, error) {
+func (s *cachedLeavesByRangeServer) GetEntryAndProof(ctx context.Context, req *trillian.GetEntryAndProofRequest) (*trillian.GetEntryAndProofResponse, error) {
 	return s.logServer.GetEntryAndProof(ctx, req)
 }
 
 // GetInclusionProof implements trillian.TrillianLogServer.
-func (s *tiledLeavesByRangeServer) GetInclusionProof(ctx context.Context, req *trillian.GetInclusionProofRequest) (*trillian.GetInclusionProofResponse, error) {
+func (s *cachedLeavesByRangeServer) GetInclusionProof(ctx context.Context, req *trillian.GetInclusionProofRequest) (*trillian.GetInclusionProofResponse, error) {
 	return s.logServer.GetInclusionProof(ctx, req)
 }
 
 // GetInclusionProofByHash implements trillian.TrillianLogServer.
-func (s *tiledLeavesByRangeServer) GetInclusionProofByHash(ctx context.Context, req *trillian.GetInclusionProofByHashRequest) (*trillian.GetInclusionProofByHashResponse, error) {
+func (s *cachedLeavesByRangeServer) GetInclusionProofByHash(ctx context.Context, req *trillian.GetInclusionProofByHashRequest) (*trillian.GetInclusionProofByHashResponse, error) {
 	return s.logServer.GetInclusionProofByHash(ctx, req)
 }
 
 // GetLatestSignedLogRoot implements trillian.TrillianLogServer.
-func (s *tiledLeavesByRangeServer) GetLatestSignedLogRoot(ctx context.Context, req *trillian.GetLatestSignedLogRootRequest) (*trillian.GetLatestSignedLogRootResponse, error) {
+func (s *cachedLeavesByRangeServer) GetLatestSignedLogRoot(ctx context.Context, req *trillian.GetLatestSignedLogRootRequest) (*trillian.GetLatestSignedLogRootResponse, error) {
 	return s.logServer.GetLatestSignedLogRoot(ctx, req)
 }
 
 // GetLeavesByRange implements trillian.TrillianLogServer and does real things. FIXME
-func (s *tiledLeavesByRangeServer) GetLeavesByRange(ctx context.Context, req *trillian.GetLeavesByRangeRequest) (*trillian.GetLeavesByRangeResponse, error) {
+func (s *cachedLeavesByRangeServer) GetLeavesByRange(ctx context.Context, req *trillian.GetLeavesByRangeRequest) (*trillian.GetLeavesByRangeResponse, error) {
 	ctx, spanEnd := spanFor(ctx, "TiledGetLeavesByRange")
 	defer spanEnd()
 
@@ -112,16 +112,16 @@ func (s *tiledLeavesByRangeServer) GetLeavesByRange(ctx context.Context, req *tr
 }
 
 // InitLog implements trillian.TrillianLogServer.
-func (s *tiledLeavesByRangeServer) InitLog(ctx context.Context, req *trillian.InitLogRequest) (*trillian.InitLogResponse, error) {
+func (s *cachedLeavesByRangeServer) InitLog(ctx context.Context, req *trillian.InitLogRequest) (*trillian.InitLogResponse, error) {
 	return s.logServer.InitLog(ctx, req)
 }
 
 // QueueLeaf implements trillian.TrillianLogServer.
-func (s *tiledLeavesByRangeServer) QueueLeaf(ctx context.Context, req *trillian.QueueLeafRequest) (*trillian.QueueLeafResponse, error) {
+func (s *cachedLeavesByRangeServer) QueueLeaf(ctx context.Context, req *trillian.QueueLeafRequest) (*trillian.QueueLeafResponse, error) {
 	return s.logServer.QueueLeaf(ctx, req)
 }
 
-func (s *tiledLeavesByRangeServer) getTreeAndContext(ctx context.Context, treeID int64, opts trees.GetOpts) (*trillian.Tree, context.Context, error) {
+func (s *cachedLeavesByRangeServer) getTreeAndContext(ctx context.Context, treeID int64, opts trees.GetOpts) (*trillian.Tree, context.Context, error) {
 	tree, err := trees.GetTree(ctx, s.registry.AdminStorage, treeID, opts)
 	if err != nil {
 		return nil, nil, err
@@ -139,7 +139,7 @@ func (t tileRequest) key() string {
 	return fmt.Sprintf("tree_id=%d/tile_size=%d/%d.cbor.gz", t.treeID, t.req.Count, t.req.StartIndex)
 }
 
-func (s *tiledLeavesByRangeServer) makeTiledRequest(tree *trillian.Tree, req *trillian.GetLeavesByRangeRequest) tileRequest {
+func (s *cachedLeavesByRangeServer) makeTiledRequest(tree *trillian.Tree, req *trillian.GetLeavesByRangeRequest) tileRequest {
 	tileOffset := req.StartIndex % s.tileSize // FIXME tileSize? Doc the difference between tileSize and maxLeavesByRange or that it's used for two meanings?
 	tileStart := req.StartIndex - tileOffset
 
@@ -162,7 +162,7 @@ const (
 	sourceS3    tileSource = "S3"
 )
 
-func (s *tiledLeavesByRangeServer) getAndCacheTile(ctx context.Context, tile tileRequest) (*trillian.GetLeavesByRangeResponse, tileSource, error) {
+func (s *cachedLeavesByRangeServer) getAndCacheTile(ctx context.Context, tile tileRequest) (*trillian.GetLeavesByRangeResponse, tileSource, error) {
 	contents, err := s.getFromS3(ctx, tile)
 	if err == nil {
 		return contents, sourceS3, nil
@@ -194,11 +194,11 @@ func (s *tiledLeavesByRangeServer) getAndCacheTile(ctx context.Context, tile til
 
 // isPartialTile returns true if there are fewer items in the tile than were
 // requested by the tileCachingHandler.
-func (s *tiledLeavesByRangeServer) isPartialTile(resp *trillian.GetLeavesByRangeResponse) bool {
+func (s *cachedLeavesByRangeServer) isPartialTile(resp *trillian.GetLeavesByRangeResponse) bool {
 	return int64(len(resp.Leaves)) < s.tileSize
 }
 
-func (s *tiledLeavesByRangeServer) getFromS3(ctx context.Context, t tileRequest) (*trillian.GetLeavesByRangeResponse, error) {
+func (s *cachedLeavesByRangeServer) getFromS3(ctx context.Context, t tileRequest) (*trillian.GetLeavesByRangeResponse, error) {
 	key := s.s3Prefix + t.key()
 	s3Resp, err := s.s3Service.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.s3Bucket),
@@ -229,7 +229,7 @@ func (s *tiledLeavesByRangeServer) getFromS3(ctx context.Context, t tileRequest)
 	return &ctResp, nil
 }
 
-func (s *tiledLeavesByRangeServer) writeToS3(ctx context.Context, t tileRequest, ctResp *trillian.GetLeavesByRangeResponse) error {
+func (s *cachedLeavesByRangeServer) writeToS3(ctx context.Context, t tileRequest, ctResp *trillian.GetLeavesByRangeResponse) error {
 	if len(ctResp.Leaves) != int(t.req.Count) { // FIXME removed the t.end check here too
 		return fmt.Errorf("internal inconsistency: len(entries) == %d; tileRequest = %v", len(ctResp.Leaves), t)
 	}
