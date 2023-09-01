@@ -66,7 +66,7 @@ func (s *cachedLeavesByRangeServer) GetLatestSignedLogRoot(ctx context.Context, 
 
 // GetLeavesByRange implements trillian.TrillianLogServer and does real things. FIXME
 func (s *cachedLeavesByRangeServer) GetLeavesByRange(ctx context.Context, req *trillian.GetLeavesByRangeRequest) (*trillian.GetLeavesByRangeResponse, error) {
-	ctx, spanEnd := spanFor(ctx, "TiledGetLeavesByRange")
+	ctx, spanEnd := spanFor(ctx, "CachedGetLeavesByRange")
 	defer spanEnd()
 
 	err := validateGetLeavesByRangeRequest(req)
