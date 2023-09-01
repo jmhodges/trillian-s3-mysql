@@ -51,6 +51,8 @@ import (
 	"github.com/jmhodges/trillian-s3-mysql/cmd/internal/serverutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/klog/v2"
 
@@ -291,15 +293,34 @@ func (s *tiledLeavesByRangeServer) GetLeavesByRange(ctx context.Context, req *tr
 	// FIXME metadata.SendHeaders probably isn't what we want since it can be
 	// only called one. Are we sure we need what the source was? Shouldn't we be
 	// testing that another way?
-	contents, _, err := s.getAndCacheTile(ctx, tile)
+	resp, _, err := s.getAndCacheTile(ctx, tile)
 	if err != nil {
 		return nil, err
+	}
+
+	// Truncate to match the request
+	prefixToRemove := req.StartIndex - tile.req.StartIndex
+	if prefixToRemove >= int64(len(resp.Leaves)) {
+		// FIXME I believe this would already happen when the original
+		// GetLeavesByRange is called?
+
+		// In this case, the requested range is entirely outside the current log,
+		// but the _tile_'s beginning was inside the log. For instance, a log with
+		// size 1000 and max_getentries of 256, where ctile is handling a request
+		// for start=1001&end=1001; the tile starts at offset 768, but is partial so
+		// it doesn't include the requested range.
+		//
+		// When Trillian gets a request that is past the end of the log, it returns
+		// 400 (for better or worse), so we emulate that here.
+		return nil, status.Errorf(codes.OutOfRange, "requested range is outside the log")
+	} else {
+		resp.Leaves = resp.Leaves[prefixToRemove:]
 	}
 
 	// FIXME use grpc status codes or some such. The grpc status lib doesn't
 	// support errors.Is and errors.As, however. See
 	// https://github.com/grpc/grpc-go/issues/2934
-	return contents, err
+	return resp, err
 }
 
 // InitLog implements trillian.TrillianLogServer.
