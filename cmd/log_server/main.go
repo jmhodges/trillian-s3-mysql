@@ -20,12 +20,15 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	_ "net/http/pprof" // Register pprof HTTP handlers.
 	"os"
 	"runtime/pprof"
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/trillian"
 	"github.com/google/trillian/cmd"
 	"github.com/google/trillian/extension"
@@ -186,9 +189,15 @@ func main() {
 			}
 			var actualServer trillian.TrillianLogServer = logServer
 			if *enableCachedGetLeavesByRange {
-				// FIXME s3 set up
+				cfg, err := config.LoadDefaultConfig(context.Background())
+				if err != nil {
+					log.Fatal(err)
+				}
+				svc := s3.NewFromConfig(cfg)
+
+				// FIXME s3Prefix and s3Bucket flags
 				actualServer = &cachedLeavesByRangeServer{
-					registry: registry, logServer: logServer, tileSize: 1000, s3Prefix: "FIXME", s3Bucket: "FIXME", s3Service: nil,
+					registry: registry, logServer: logServer, tileSize: 1000, s3Prefix: "FIXME", s3Bucket: "FIXME", s3Service: svc,
 					cacheGroup: &singleflight.Group{},
 				}
 			}
