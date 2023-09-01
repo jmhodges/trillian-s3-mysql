@@ -100,11 +100,14 @@ func (s *cachedLeavesByRangeServer) GetLeavesByRange(ctx context.Context, req *t
 		//
 		// When Trillian gets a request that is past the end of the log, it returns
 		// 400 (for better or worse), so we emulate that here.
-		return nil, status.Errorf(codes.OutOfRange, "requested range is outside the log")
+		return nil, status.Errorf(codes.OutOfRange, "requested range is past the end of the log")
 	} else {
 		resp.Leaves = resp.Leaves[prefixToRemove:]
 	}
 
+	if int64(len(resp.Leaves)) > req.Count {
+		resp.Leaves = resp.Leaves[:req.Count]
+	}
 	// FIXME use grpc status codes or some such. The grpc status lib doesn't
 	// support errors.Is and errors.As, however. See
 	// https://github.com/grpc/grpc-go/issues/2934
