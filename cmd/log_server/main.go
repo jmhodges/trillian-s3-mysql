@@ -28,7 +28,6 @@ import (
 
 	"github.com/google/trillian"
 	"github.com/google/trillian/cmd"
-	"github.com/google/trillian/cmd/internal/serverutil"
 	"github.com/google/trillian/extension"
 	"github.com/google/trillian/monitoring"
 	"github.com/google/trillian/monitoring/opencensus"
@@ -41,6 +40,7 @@ import (
 	"github.com/google/trillian/storage"
 	"github.com/google/trillian/util"
 	"github.com/google/trillian/util/clock"
+	"github.com/jmhodges/trillian-s3-mysql/cmd/internal/serverutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"
 	"k8s.io/klog/v2"
