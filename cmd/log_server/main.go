@@ -293,8 +293,12 @@ func (s *tiledLeavesByRangeServer) GetLeavesByRange(ctx context.Context, req *tr
 	// testing that another way?
 	contents, _, err := s.getAndCacheTile(ctx, tile)
 	if err != nil {
-		return nil, err // FIXME status codes or some such?
+		return nil, err
 	}
+
+	// FIXME use grpc status codes or some such. The grpc status lib doesn't
+	// support errors.Is and errors.As, however. See
+	// https://github.com/grpc/grpc-go/issues/2934
 	return contents, err
 }
 
@@ -387,7 +391,7 @@ func (s *tiledLeavesByRangeServer) isPartialTile(resp *trillian.GetLeavesByRange
 
 func (s *tiledLeavesByRangeServer) getFromS3(ctx context.Context, t tileRequest) (*trillian.GetLeavesByRangeResponse, error) {
 	key := s.s3Prefix + t.key()
-	resp, err := s.s3Service.GetObject(ctx, &s3.GetObjectInput{
+	s3Resp, err := s.s3Service.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.s3Bucket),
 		Key:    aws.String(key),
 	})
@@ -399,31 +403,31 @@ func (s *tiledLeavesByRangeServer) getFromS3(ctx context.Context, t tileRequest)
 		return nil, fmt.Errorf("getting from bucket %q with key %q: %w", s.s3Bucket, key, err)
 	}
 
-	var entries trillian.GetLeavesByRangeResponse // FIXME rename to "resp"
-	gzipReader, err := gzip.NewReader(resp.Body)
+	var ctResp trillian.GetLeavesByRangeResponse
+	gzipReader, err := gzip.NewReader(s3Resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("making gzipReader: %w", err)
 	}
-	err = cbor.NewDecoder(gzipReader).Decode(&entries)
+	err = cbor.NewDecoder(gzipReader).Decode(&ctResp)
 	if err != nil {
 		return nil, fmt.Errorf("reading body from bucket %q with key %q: %w", s.s3Bucket, key, err)
 	}
 
-	if len(entries.Leaves) != int(t.req.Count) { // FIXME removed the t.end check here
-		return nil, fmt.Errorf("internal inconsistency: len(entries) == %d; tileRequest = %v", len(entries.Leaves), t)
+	if len(ctResp.Leaves) != int(t.req.Count) { // FIXME removed the t.end check here
+		return nil, fmt.Errorf("internal inconsistency: len(entries) == %d; tileRequest = %v", len(ctResp.Leaves), t)
 	}
 
-	return &entries, nil
+	return &ctResp, nil
 }
 
-func (s *tiledLeavesByRangeServer) writeToS3(ctx context.Context, t tileRequest, e *trillian.GetLeavesByRangeResponse) error {
-	if len(e.Leaves) != int(t.req.Count) { // FIXME removed the t.end check here too
-		return fmt.Errorf("internal inconsistency: len(entries) == %d; tileRequest = %v", len(e.Leaves), t)
+func (s *tiledLeavesByRangeServer) writeToS3(ctx context.Context, t tileRequest, ctResp *trillian.GetLeavesByRangeResponse) error {
+	if len(ctResp.Leaves) != int(t.req.Count) { // FIXME removed the t.end check here too
+		return fmt.Errorf("internal inconsistency: len(entries) == %d; tileRequest = %v", len(ctResp.Leaves), t)
 	}
 
 	var body bytes.Buffer
 	w := gzip.NewWriter(&body)
-	err := cbor.NewEncoder(w).Encode(e)
+	err := cbor.NewEncoder(w).Encode(ctResp)
 	if err != nil {
 		return nil
 	}
