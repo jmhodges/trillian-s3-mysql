@@ -111,7 +111,7 @@ func (s *cachedLeavesByRangeServer) GetLeavesByRange(ctx context.Context, req *t
 	// FIXME use grpc status codes or some such. The grpc status lib doesn't
 	// support errors.Is and errors.As, however. See
 	// https://github.com/grpc/grpc-go/issues/2934
-	return resp, err
+	return resp, nil
 }
 
 // InitLog implements trillian.TrillianLogServer.
