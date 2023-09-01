@@ -80,6 +80,8 @@ var (
 	// Profiling related flags.
 	cpuProfile = flag.String("cpuprofile", "", "If set, write CPU profile to this file")
 	memProfile = flag.String("memprofile", "", "If set, write memory profile to this file")
+
+	enableCachedGetLeavesByRange = flag.Bool("cache-leaves-by-range", false, "If true, GetLeavesByRange requests will be tiled and cached")
 )
 
 func main() {
@@ -181,9 +183,14 @@ func main() {
 			if err := logServer.IsHealthy(); err != nil {
 				return err
 			}
-			tiledLeavesByRangeServer := &tiledLeavesByRangeServer{
-				registry: registry, logServer: logServer, tileSize: 1000, s3Prefix: "FIXME", s3Bucket: "FIXME", s3Service: nil} // FIXME s3 set up
-			trillian.RegisterTrillianLogServer(s, tiledLeavesByRangeServer)
+			var actualServer trillian.TrillianLogServer = logServer
+			if *enableCachedGetLeavesByRange {
+				// FIXME s3 set up
+				actualServer = &tiledLeavesByRangeServer{
+					registry: registry, logServer: logServer, tileSize: 1000, s3Prefix: "FIXME", s3Bucket: "FIXME", s3Service: nil,
+				}
+			}
+			trillian.RegisterTrillianLogServer(s, actualServer)
 			if *quotaSystem == etcd.QuotaManagerName {
 				quotapb.RegisterQuotaServer(s, quotaapi.NewServer(client))
 			}
