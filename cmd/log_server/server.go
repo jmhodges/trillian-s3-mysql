@@ -82,8 +82,8 @@ func (s *cachedLeavesByRangeServer) GetLeavesByRange(ctx context.Context, req *t
 	tile := s.makeTiledRequest(tree, req)
 
 	// FIXME metadata.SendHeaders probably isn't what we want since it can be
-	// only called one. Are we sure we need what the source was? Shouldn't we be
-	// testing that another way?
+	// only called once and doesn't work with the grpc/status lib. Are we sure
+	// we need what the source was? Shouldn't we be testing that another way?
 	resp, _, err := s.getAndCacheTile(ctx, tile)
 	if err != nil {
 		return nil, err
