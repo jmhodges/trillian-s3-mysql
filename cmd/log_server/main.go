@@ -42,6 +42,7 @@ import (
 	"github.com/google/trillian/util/clock"
 	"github.com/jmhodges/trillian-s3-mysql/cmd/internal/serverutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"k8s.io/klog/v2"
 
@@ -188,6 +189,7 @@ func main() {
 				// FIXME s3 set up
 				actualServer = &cachedLeavesByRangeServer{
 					registry: registry, logServer: logServer, tileSize: 1000, s3Prefix: "FIXME", s3Bucket: "FIXME", s3Service: nil,
+					cacheGroup: &singleflight.Group{},
 				}
 			}
 			trillian.RegisterTrillianLogServer(s, actualServer)

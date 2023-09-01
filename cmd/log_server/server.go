@@ -15,6 +15,7 @@ import (
 	"github.com/google/trillian/extension"
 	"github.com/google/trillian/monitoring"
 	"github.com/google/trillian/trees"
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -35,6 +36,8 @@ type cachedLeavesByRangeServer struct {
 	s3Prefix  string
 	s3Bucket  string
 	s3Service *s3.Client
+
+	cacheGroup *singleflight.Group
 }
 
 // AddSequencedLeaves implements trillian.TrillianLogServer.
@@ -169,6 +172,24 @@ const (
 )
 
 func (s *cachedLeavesByRangeServer) getAndCacheTile(ctx context.Context, tile tileRequest) (*trillian.GetLeavesByRangeResponse, tileSource, error) {
+	dedupKey := fmt.Sprintf("treeID-%s-request-%d-%d", tile.treeID, tile.req.StartIndex, tile.req.Count)
+
+	type respAndSource struct {
+		entries *trillian.GetLeavesByRangeResponse
+		source  tileSource
+	}
+
+	innerContents, err, _ := singleflightDo(s.cacheGroup, dedupKey, func() (respAndSource, error) {
+		contents, source, err := s.getAndCacheTileUncollapsed(ctx, tile)
+		return respAndSource{contents, source}, err
+	})
+
+	// The value from our singleflightDo closure is always non-nil, so we don't
+	// need an err != nil check here.
+	return innerContents.entries, innerContents.source, err
+}
+
+func (s *cachedLeavesByRangeServer) getAndCacheTileUncollapsed(ctx context.Context, tile tileRequest) (*trillian.GetLeavesByRangeResponse, tileSource, error) {
 	contents, err := s.getFromS3(ctx, tile)
 	if err == nil {
 		return contents, sourceS3, nil
@@ -285,4 +306,14 @@ const traceSpanRoot = "/trillian"
 
 func spanFor(ctx context.Context, name string) (context.Context, func()) {
 	return monitoring.StartSpan(ctx, fmt.Sprintf("%s.%s", traceSpanRoot, name))
+}
+
+// singleflightDo is a wrapper around singleflight.Group.Do that, instead of
+// returning an interface{}, returns the exact type of the first return type of
+// the function fn. (singleflight was built before generics)
+func singleflightDo[V any](group *singleflight.Group, key string, fn func() (V, error)) (V, error, bool) {
+	out, err, shared := group.Do(key, func() (interface{}, error) {
+		return fn()
+	})
+	return out.(V), err, shared
 }
