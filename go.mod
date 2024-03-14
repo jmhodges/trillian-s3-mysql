@@ -13,7 +13,7 @@ require (
 	go.etcd.io/etcd/client/v3 v3.5.9
 	golang.org/x/sync v0.2.0
 	google.golang.org/grpc v1.57.1
-	google.golang.org/protobuf v1.30.0
+	google.golang.org/protobuf v1.33.0
 	k8s.io/klog/v2 v2.100.1
 )
 
